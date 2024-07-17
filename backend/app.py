@@ -1,9 +1,10 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
 import easyocr
 import numpy as np
 from PIL import Image
 import io
+import cv2
 
 app = Flask(__name__)
 CORS(app)
@@ -17,6 +18,33 @@ def decode_image(image_data):
         return np.array(image)
     except Exception as e:
         print(f"Error decoding image: {e}")
+        return None
+
+def preprocess_image(image):
+    try:
+        # Convert the image to grayscale
+        gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
+        
+        # Apply Gaussian blur to reduce noise
+        blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+        
+        # Apply adaptive thresholding
+        adaptive_thresh = cv2.adaptiveThreshold(
+            blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 11, 2)
+        
+        # Apply morphological operations
+        kernel = np.ones((3, 3), np.uint8)
+        morph = cv2.morphologyEx(adaptive_thresh, cv2.MORPH_CLOSE, kernel)
+        
+        # Resize the image to a standard size
+        resized = cv2.resize(morph, (450, 450))
+        
+        # Save the preprocessed image to a file
+        cv2.imwrite('preprocessed_image.png', resized)
+        
+        return resized
+    except Exception as e:
+        print(f"Error preprocessing image: {e}")
         return None
 
 def solve_sudoku(board):
@@ -59,8 +87,13 @@ def upload_image():
         if image is None:
             return jsonify({"error": "Failed to decode image"}), 400
         
-        # Perform OCR on the image with bounding boxes
-        results = reader.readtext(image)
+        # Preprocess the image
+        preprocessed_image = preprocess_image(image)
+        if preprocessed_image is None:
+            return jsonify({"error": "Failed to preprocess image"}), 400
+        
+        # Perform OCR on the preprocessed image with bounding boxes
+        results = reader.readtext(preprocessed_image, detail=1, paragraph=False)
         
         # Initialize an empty 9x9 grid with zeros
         sudoku_grid = [[0 for _ in range(9)] for _ in range(9)]
@@ -69,7 +102,7 @@ def upload_image():
         def map_results_to_grid(results):
             # Define grid dimensions and cell size
             grid_size = 9
-            image_height, image_width = image.shape[:2]
+            image_height, image_width = preprocessed_image.shape[:2]
             cell_width = image_width / grid_size
             cell_height = image_height / grid_size
 
@@ -104,6 +137,14 @@ def upload_image():
     except Exception as e:
         print(f"Error processing image: {e}")
         return jsonify({"error": "An error occurred while processing the image"}), 500
+
+@app.route('/preprocessed_image', methods=['GET'])
+def get_preprocessed_image():
+    try:
+        return send_file('preprocessed_image.png', mimetype='image/png')
+    except Exception as e:
+        print(f"Error sending preprocessed image: {e}")
+        return jsonify({"error": "Failed to send preprocessed image"}), 500
 
 if __name__ == '__main__':
     app.run(debug=True)
